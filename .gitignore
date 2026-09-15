@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+dist/
+build/
+.venv/
+venv/
+.env
+*.wav
+!tests/fixtures/.gitkeep
+
+# Models / local caches
+models/
+.cache/
+*.bin
+*.gguf
+*.onnx
+
+# Logs & runtime
+logs/
+*.log
+data/cache/
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Audio temp
+/tmp/
+*.ogg
+*.opus

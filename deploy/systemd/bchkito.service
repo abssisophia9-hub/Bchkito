@@ -1,0 +1,21 @@
+[Unit]
+Description=Bchkito Darija companion
+After=network-online.target sound.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/Bchkito
+EnvironmentFile=-/home/pi/Bchkito/.env
+ExecStart=/home/pi/Bchkito/.venv/bin/bchkito run --ptt
+Restart=on-failure
+RestartSec=5
+Nice=5
+
+# Watchdog-friendly logging
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
