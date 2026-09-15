@@ -23,6 +23,7 @@ models/
 logs/
 *.log
 data/cache/
+data/care_state.json
 
 # IDE / OS
 .idea/

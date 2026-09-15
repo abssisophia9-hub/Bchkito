@@ -10,6 +10,9 @@ import numpy as np
 
 from bchkito.audio.playback import play_earcon, play_wav
 from bchkito.audio.vad import trim_silence
+from bchkito.care.games import MindGames
+from bchkito.care.service import CareService, extract_glucose_value
+from bchkito.care.store import get_care_store
 from bchkito.config import Settings
 from bchkito.prompts_loader import load_prompt
 from bchkito.skills.chat import ChatSkill
@@ -58,6 +61,8 @@ class VoicePipeline:
         self.family = FamilyBridgeSkill(
             settings, self.local_llm, self.cloud_llm, self.tts_cloud, self.tts_local
         )
+        self.care = CareService(get_care_store(), settings)
+        self.games = MindGames(get_care_store())
         self._pending_whatsapp: str | None = None
         self.system_prompt = load_prompt("darija_system.md")
 
@@ -65,7 +70,6 @@ class VoicePipeline:
         started = time.perf_counter()
         self.state = VoiceState.THINKING
         play_earcon(self.settings, "thinking")
-
         trimmed = trim_silence(audio, self.settings.sample_rate)
         transcript = self.stt.transcribe(trimmed)
         return await self.handle_transcript(transcript, speak=speak, started=started)
@@ -83,7 +87,13 @@ class VoicePipeline:
             transcript = Transcript(text=transcript)
 
         text = transcript.text.strip()
-        intent = self.router.route(text, pending_whatsapp=bool(self._pending_whatsapp))
+        care_state = self.care.store.load()
+        intent = self.router.route(
+            text,
+            pending_whatsapp=bool(self._pending_whatsapp),
+            pending_dose=bool(care_state.pending_dose_id),
+            pending_game=bool(care_state.pending_game_id),
+        )
         logger.info("Intent=%s transcript=%s", intent.value, text)
 
         used_cloud = False
@@ -92,49 +102,63 @@ class VoicePipeline:
 
         if not text:
             reply = "ماسمعتش مزيان، عاود من فضلك."
+        elif intent == Intent.SOS:
+            self._pending_whatsapp = None
+            reply = self.care.trigger_sos(text)
+            tts_tier = "azure"
+        elif intent == Intent.MED_REMINDER:
+            reply, _dose = self.care.start_reminder()
+        elif intent == Intent.MED_RESPONSE:
+            reply = self.care.handle_med_response(text)
+        elif intent == Intent.GAME:
+            turn = self.games.start()
+            reply = turn.prompt
+        elif intent == Intent.GAME_ANSWER:
+            reply = self.games.answer(text)
+        elif intent == Intent.GLUCOSE:
+            value = extract_glucose_value(text)
+            reply = self.care.log_glucose(value, note=text)
         elif intent == Intent.CONFIRM and self._pending_whatsapp:
             reply, used_cloud = await self.family.send_pending(self._pending_whatsapp)
             self._pending_whatsapp = None
-            tts_tier = "elevenlabs" if self.settings.whatsapp_default_mode == "voice" else "azure"
+            tts_tier = (
+                "elevenlabs" if self.settings.whatsapp_default_mode == "voice" else "azure"
+            )
         elif intent == Intent.CANCEL and self._pending_whatsapp:
             self._pending_whatsapp = None
             reply = "واخا، ماصيفطتش الرسالة."
         elif intent == Intent.WHATSAPP_SEND:
             draft = self.family.extract_message(text)
             self._pending_whatsapp = draft
-            reply = (
-                f"واخا، غنصيفط لـ {self.settings.daughter_name}: "
-                f"«{draft}». إيوا، نقولو نعم؟"
-            )
+            name = care_state.elder.caregiver_name or self.settings.daughter_name
+            reply = f"واخا، غنصيفط لـ {name}: «{draft}». إيوا، نقولو نعم؟"
             tts_tier = "azure"
-        elif intent in {Intent.WEATHER, Intent.NEWS, Intent.MORNING, Intent.CHAT}:
-            # Drop stale WhatsApp draft if user switched topics
+        elif intent == Intent.WEATHER:
             self._pending_whatsapp = None
-            if intent == Intent.WEATHER:
-                reply, used_cloud = await self.info_hub.weather(text)
-            elif intent == Intent.NEWS:
-                reply, used_cloud = await self.info_hub.news(prefer_cloud=True)
-            elif intent == Intent.MORNING:
-                weather, _ = await self.info_hub.weather(text)
-                news, news_cloud = await self.info_hub.news(
-                    prefer_cloud=True, max_items=1
-                )
-                reply = f"{weather} {news}".strip()
-                used_cloud = news_cloud
-            else:
-                prefer_cloud = transcript.low_confidence
-                reply, used_cloud = await self.chat.reply(
-                    text,
-                    system_prompt=self.system_prompt,
-                    prefer_cloud=prefer_cloud,
-                )
-                if not reply:
-                    reply = "سمح ليا، ماقدرش نجاوب دابا. جرب مرة أخرى."
+            reply, used_cloud = await self.info_hub.weather(text)
+        elif intent == Intent.NEWS:
+            self._pending_whatsapp = None
+            reply, used_cloud = await self.info_hub.news(prefer_cloud=True)
+        elif intent == Intent.MORNING:
+            self._pending_whatsapp = None
+            weather, _ = await self.info_hub.weather(text)
+            med_line, _ = self.care.start_reminder()
+            # Don't leave pending from morning unless it's truly due — clear if greeting only
+            reply = f"صباح الخير. {weather} {med_line}"
+        elif intent == Intent.CHAT:
+            self._pending_whatsapp = None
+            prefer_cloud = transcript.low_confidence
+            reply, used_cloud = await self.chat.reply(
+                text,
+                system_prompt=self.system_prompt,
+                prefer_cloud=prefer_cloud,
+            )
+            if not reply:
+                reply = "سمح ليا، ماقدرش نجاوب دابا. جرب مرة أخرى."
         else:
             reply = "سمح ليا، ماقدرتش نفهم. عاود من فضلك."
 
         if transcript.low_confidence and intent == Intent.CHAT and text:
-            # Soft confirmation style for weak STT
             reply = f"فهمت: {text}. {reply}"
 
         audio_path = await self.speak(reply, tier=tts_tier) if speak else None
@@ -160,12 +184,10 @@ class VoicePipeline:
         self.state = VoiceState.SPEAKING
         tier = tier or self.settings.tts_default_tier
         path: Path | None = None
-
         if tier in {"azure", "elevenlabs"}:
             path = await self.tts_cloud.synthesize(text, tier=tier)
         if path is None:
             path = await self.tts_local.synthesize(text)
-
         try:
             if path and path.suffix.lower() in {".wav", ".wave"}:
                 play_wav(path)
