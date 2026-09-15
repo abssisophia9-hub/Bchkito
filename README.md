@@ -8,6 +8,38 @@ Tiny, cute **AI-powered robotic companion** for elderly Moroccan speakers of **D
 2. **Localized Info Hub** — OpenWeatherMap + Moroccan RSS, spoken as caring Darija updates
 3. **Family Bridge** — WhatsApp Cloud API; dictate in Darija, confirm, send text or voice note
 
+## Documentation
+
+| Doc | Purpose |
+|-----|---------|
+| [docs/PROCESS.md](docs/PROCESS.md) | How we built this / how to continue |
+| [docs/ARCHITECTURE_V2.md](docs/ARCHITECTURE_V2.md) | Wearable care system architecture |
+| [docs/RUNBOOK.md](docs/RUNBOOK.md) | Pi deploy |
+| [docs/FIELD_TEST.md](docs/FIELD_TEST.md) | Elderly field checklist |
+
+## Care prototype (v2 — dashboard + pendant simulator)
+
+```bash
+.\.venv\Scripts\activate
+python scripts/prototype_server.py
+```
+
+- **Caregiver dashboard:** http://127.0.0.1:8765/
+- **Elder pendant simulator:** http://127.0.0.1:8765/elder
+
+Try: dashboard button «محاكاة: حان وقت الدوا» → on pendant say «خذيت الدوا». Try SOS. Watch WhatsApp outbox fill on the dashboard.
+
+Architecture notes: [docs/ARCHITECTURE_V2.md](docs/ARCHITECTURE_V2.md)
+
+## Web prototype (no Pi needed)
+
+```bash
+.\.venv\Scripts\activate   # or: source .venv/bin/activate
+python scripts/prototype_server.py
+```
+
+Opens **http://127.0.0.1:8765** — caregiver + elder UIs.
+
 ## Quick start (dev machine)
 
 ```bash
